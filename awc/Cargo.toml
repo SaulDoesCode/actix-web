@@ -35,14 +35,14 @@ compress = ["actix-http/compress"]
 
 [dependencies]
 actix-codec = "0.2.0"
-actix-service = "1.0.1"
-actix-http = "2.0.0-alpha.2"
+actix-service = "1.0.5"
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
 actix-rt = "1.0.0"
 
-base64 = "0.11"
-bytes = "0.5.3"
-derive_more = "0.99.2"
-futures-core = "0.3.1"
+base64 = "0.12"
+bytes = "0.5.4"
+derive_more = "0.99.5"
+futures-core = "0.3.4"
 log =" 0.4"
 mime = "0.3"
 percent-encoding = "2.1"
@@ -56,13 +56,13 @@ rust-tls = { version = "0.17.0", package="rustls", optional = true, features = [
 [dev-dependencies]
 actix-connect = { version = "2.0.0-alpha.2", features=["openssl"] }
 actix-web = { version = "3.0.0-alpha.1", features=["openssl"] }
-actix-http = { version = "2.0.0-alpha.2", features=["openssl"] }
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web", features=["openssl"] }
 actix-http-test = { version = "1.0.0", features=["openssl"] }
-actix-utils = "1.0.3"
-actix-server = "1.0.0"
+actix-utils = "1.0.6"
+actix-server = "1.0.2"
 actix-tls = { version = "2.0.0-alpha.1", features=["openssl", "rustls"] }
 brotli2 = "0.3.2"
-flate2 = "1.0.13"
-futures = "0.3.1"
+flate2 = "1.0.14"
+futures = "0.3.4"
 env_logger = "0.7"
 webpki = "0.21"
