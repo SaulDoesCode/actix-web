@@ -83,8 +83,8 @@ actix-threadpool = "0.3.1"
 actix-tls = "2.0.0-alpha.1"
 
 actix-web-codegen = "0.2.1"
-actix-http = "2.0.0-alpha.2"
-awc = { version = "2.0.0-alpha.1", default-features = false }
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
+awc = { git = "https://github.com/SaulDoesCode/actix-web", default-features = false }
 
 bytes = "0.5.4"
 derive_more = "0.99.5"
