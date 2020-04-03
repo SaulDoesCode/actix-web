@@ -422,7 +422,7 @@ mod tests {
     use super::*;
     use crate::error::InternalError;
     use crate::http::header;
-    use crate::test::{load_stream, TestRequest};
+    use crate::test::{TestRequest};
     use crate::HttpResponse;
 
     #[derive(Serialize, Deserialize, PartialEq, Debug)]
