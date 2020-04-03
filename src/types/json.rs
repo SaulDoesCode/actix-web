@@ -405,7 +405,7 @@ where
                         body.extend_from_slice(&chunk);
                     }
                 }
-                Ok(serde_json::from_slice::<U>(&body)?)
+                Ok(simd_json::from_slice::<U>(&body)?)
             }
             .boxed_local(),
         );
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
         let body = load_stream(resp.take_body()).await.unwrap();
-        let msg: MyObject = serde_json::from_slice(&body).unwrap();
+        let msg: MyObject = simd_json::from_slice(&body).unwrap();
         assert_eq!(msg.name, "invalid request");
     }
 
