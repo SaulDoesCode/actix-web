@@ -18,19 +18,19 @@ name = "actix_files"
 path = "src/lib.rs"
 
 [dependencies]
-actix-web = { version = "3.0.0-alpha.1", default-features = false }
-actix-http = "2.0.0-alpha.2"
-actix-service = "1.0.1"
+actix-web = { git = "https://github.com/SaulDoesCode/actix-web", default-features = false }
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
+actix-service = "1.0.5"
 bitflags = "1"
-bytes = "0.5.3"
-futures = "0.3.1"
-derive_more = "0.99.2"
+bytes = "0.5.4"
+futures = "0.3.4"
+derive_more = "0.99.5"
 log = "0.4"
 mime = "0.3"
-mime_guess = "2.0.1"
+mime_guess = "2.0.3"
 percent-encoding = "2.1"
 v_htmlescape = "0.4"
 
 [dev-dependencies]
 actix-rt = "1.0.0"
-actix-web = { version = "3.0.0-alpha.1", features=["openssl"] }
+actix-web = { git = "https://github.com/SaulDoesCode/actix-web", features=["openssl"] }
