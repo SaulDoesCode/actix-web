@@ -405,7 +405,7 @@ where
                         body.extend_from_slice(&chunk);
                     }
                 }
-                Ok(simd_json::from_slice::<U>(&body)?)
+                Ok(simd_json::from_slice::<U>(&mut body)?)
             }
             .boxed_local(),
         );
@@ -488,8 +488,13 @@ mod tests {
         let mut resp = Response::from_error(s.err().unwrap().into());
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
-        let body = load_stream(resp.take_body()).await.unwrap();
-        let msg: MyObject = simd_json::from_slice(&body).unwrap();
+        let mut stream = resp.take_body();
+        let mut body = BytesMut::new();
+        while let Some(Ok(item)) = stream.next().await {
+            body.extend_from_slice(&item);
+        }
+
+        let msg: MyObject = simd_json::from_slice(&mut body).unwrap();
         assert_eq!(msg.name, "invalid request");
     }
 
