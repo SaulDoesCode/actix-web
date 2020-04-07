@@ -13,6 +13,7 @@
 ### Added
 
 * Add helper function for creating routes with `TRACE` method guard `web::trace()`
+* Add convenience functions `test::read_body_json()` and `test::TestRequest::send_request()` for testing.
 
 ### Changed
 
