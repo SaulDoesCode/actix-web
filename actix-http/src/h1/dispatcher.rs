@@ -1,6 +1,3 @@
-// Because MSRV is 1.39.0.
-#![allow(clippy::mem_replace_with_default)]
-
 use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
@@ -61,7 +58,7 @@ where
     inner: DispatcherState<T, S, B, X, U>,
 }
 
-#[pin_project]
+#[pin_project(project = DispatcherStateProj)]
 enum DispatcherState<T, S, B, X, U>
 where
     S: Service<Request = Request>,
@@ -76,7 +73,7 @@ where
     Upgrade(Pin<Box<U::Future>>),
 }
 
-#[pin_project]
+#[pin_project(project = InnerDispatcherProj)]
 struct InnerDispatcher<T, S, B, X, U>
 where
     S: Service<Request = Request>,
@@ -115,7 +112,7 @@ enum DispatcherMessage {
     Error(Response<()>),
 }
 
-#[pin_project]
+#[pin_project(project = StateProj)]
 enum State<S, B, X>
 where
     S: Service<Request = Request>,
@@ -135,19 +132,11 @@ where
     B: MessageBody,
 {
     fn is_empty(&self) -> bool {
-        if let State::None = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, State::None)
     }
 
     fn is_call(&self) -> bool {
-        if let State::ServiceCall(_) = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, State::ServiceCall(_))
     }
 }
 enum PollResponse {
@@ -159,14 +148,8 @@ enum PollResponse {
 impl PartialEq for PollResponse {
     fn eq(&self, other: &PollResponse) -> bool {
         match self {
-            PollResponse::DrainWriteBuf => match other {
-                PollResponse::DrainWriteBuf => true,
-                _ => false,
-            },
-            PollResponse::DoNothing => match other {
-                PollResponse::DoNothing => true,
-                _ => false,
-            },
+            PollResponse::DrainWriteBuf => matches!(other, PollResponse::DrainWriteBuf),
+            PollResponse::DoNothing => matches!(other, PollResponse::DoNothing),
             _ => false,
         }
     }
@@ -297,9 +280,8 @@ where
 
     /// Flush stream
     ///
-    /// true - got whouldblock
-    /// false - didnt get whouldblock
-    #[pin_project::project]
+    /// true - got WouldBlock
+    /// false - didn't get WouldBlock
     fn poll_flush(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -310,8 +292,7 @@ where
 
         let len = self.write_buf.len();
         let mut written = 0;
-        #[project]
-        let InnerDispatcher { io, write_buf, .. } = self.project();
+        let InnerDispatcherProj { io, write_buf, .. } = self.project();
         let mut io = Pin::new(io.as_mut().unwrap());
         while written < len {
             match io.as_mut().poll_write(cx, &write_buf[written..]) {
@@ -333,11 +314,15 @@ where
                 Poll::Ready(Err(err)) => return Err(DispatchError::Io(err)),
             }
         }
+
         if written == write_buf.len() {
+            // SAFETY: setting length to 0 is safe
+            // skips one length check vs truncate
             unsafe { write_buf.set_len(0) }
         } else {
             write_buf.advance(written);
         }
+
         Ok(false)
     }
 
@@ -369,16 +354,14 @@ where
             .extend_from_slice(b"HTTP/1.1 100 Continue\r\n\r\n");
     }
 
-    #[pin_project::project]
     fn poll_response(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Result<PollResponse, DispatchError> {
         loop {
             let mut this = self.as_mut().project();
-            #[project]
             let state = match this.state.project() {
-                State::None => match this.messages.pop_front() {
+                StateProj::None => match this.messages.pop_front() {
                     Some(DispatcherMessage::Item(req)) => {
                         Some(self.as_mut().handle_request(req, cx)?)
                     }
@@ -391,7 +374,7 @@ where
                     }
                     None => None,
                 },
-                State::ExpectCall(fut) => match fut.as_mut().poll(cx) {
+                StateProj::ExpectCall(fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(req)) => {
                         self.as_mut().send_continue();
                         this = self.as_mut().project();
@@ -406,7 +389,7 @@ where
                     }
                     Poll::Pending => None,
                 },
-                State::ServiceCall(fut) => match fut.as_mut().poll(cx) {
+                StateProj::ServiceCall(fut) => match fut.as_mut().poll(cx) {
                     Poll::Ready(Ok(res)) => {
                         let (res, body) = res.into().replace_body(());
                         let state = self.as_mut().send_response(res, body)?;
@@ -421,7 +404,7 @@ where
                     }
                     Poll::Pending => None,
                 },
-                State::SendPayload(mut stream) => {
+                StateProj::SendPayload(mut stream) => {
                     loop {
                         if this.write_buf.len() < HW_BUFFER_SIZE {
                             match stream.as_mut().poll_next(cx) {
@@ -727,13 +710,11 @@ where
 {
     type Output = Result<(), DispatchError>;
 
-    #[pin_project::project]
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.as_mut().project();
-        #[project]
         match this.inner.project() {
-            DispatcherState::Normal(mut inner) => {
+            DispatcherStateProj::Normal(mut inner) => {
                 inner.as_mut().poll_keepalive(cx)?;
 
                 if inner.flags.contains(Flags::SHUTDOWN) {
@@ -795,13 +776,10 @@ where
                             let inner_p = inner.as_mut().project();
                             let mut parts = FramedParts::with_read_buf(
                                 inner_p.io.take().unwrap(),
-                                std::mem::replace(inner_p.codec, Codec::default()),
-                                std::mem::replace(inner_p.read_buf, BytesMut::default()),
+                                std::mem::take(inner_p.codec),
+                                std::mem::take(inner_p.read_buf),
                             );
-                            parts.write_buf = std::mem::replace(
-                                inner_p.write_buf,
-                                BytesMut::default(),
-                            );
+                            parts.write_buf = std::mem::take(inner_p.write_buf);
                             let framed = Framed::from_parts(parts);
                             let upgrade =
                                 inner_p.upgrade.take().unwrap().call((req, framed));
@@ -812,7 +790,7 @@ where
                             return self.poll(cx);
                         }
 
-                        // we didnt get WouldBlock from write operation,
+                        // we didn't get WouldBlock from write operation,
                         // so data get written to kernel completely (OSX)
                         // and we have to write again otherwise response can get stuck
                         if inner.as_mut().poll_flush(cx)? || !drain {
@@ -856,7 +834,7 @@ where
                     }
                 }
             }
-            DispatcherState::Upgrade(fut) => fut.as_mut().poll(cx).map_err(|e| {
+            DispatcherStateProj::Upgrade(fut) => fut.as_mut().poll(cx).map_err(|e| {
                 error!("Upgrade handler error: {}", e);
                 DispatchError::Upgrade
             }),
@@ -873,7 +851,14 @@ where
     T: AsyncRead + Unpin,
 {
     let mut read_some = false;
+
     loop {
+        // If buf is full return but do not disconnect since
+        // there is more reading to be done
+        if buf.len() >= HW_BUFFER_SIZE {
+            return Ok(Some(false));
+        }
+
         let remaining = buf.capacity() - buf.len();
         if remaining < LW_BUFFER_SIZE {
             buf.reserve(HW_BUFFER_SIZE - remaining);

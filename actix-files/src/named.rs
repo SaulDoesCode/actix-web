@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::MetadataExt;
 
 use bitflags::bitflags;
-use mime;
 use mime_guess::from_path;
 
 use actix_http::body::SizedStream;
@@ -18,7 +17,7 @@ use actix_web::http::header::{
 };
 use actix_web::http::{ContentEncoding, StatusCode};
 use actix_web::{Error, HttpMessage, HttpRequest, HttpResponse, Responder};
-use futures::future::{ready, Ready};
+use futures_util::future::{ready, Ready};
 
 use crate::range::HttpRange;
 use crate::ChunkedReadFile;
@@ -90,7 +89,7 @@ impl NamedFile {
             };
 
             let ct = from_path(&path).first_or_octet_stream();
-            let disposition_type = match ct.type_() {
+            let disposition = match ct.type_() {
                 mime::IMAGE | mime::TEXT | mime::VIDEO => DispositionType::Inline,
                 _ => DispositionType::Attachment,
             };
@@ -104,8 +103,8 @@ impl NamedFile {
                 }))
             }
             let cd = ContentDisposition {
-                disposition: disposition_type,
-                parameters: parameters,
+                disposition,
+                parameters,
             };
             (ct, cd)
         };
@@ -388,11 +387,12 @@ impl NamedFile {
             fut: None,
             counter: 0,
         };
+
         if offset != 0 || length != self.md.len() {
-            Ok(resp.status(StatusCode::PARTIAL_CONTENT).streaming(reader))
-        } else {
-            Ok(resp.body(SizedStream::new(length, reader)))
+            resp.status(StatusCode::PARTIAL_CONTENT);
         }
+
+        Ok(resp.body(SizedStream::new(length, reader)))
     }
 }
 

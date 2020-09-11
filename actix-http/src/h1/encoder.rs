@@ -4,7 +4,7 @@ use std::ptr::copy_nonoverlapping;
 use std::slice::from_raw_parts_mut;
 use std::{cmp, io};
 
-use bytes::{buf::BufMutExt, BufMut, BytesMut};
+use bytes::{BufMut, BytesMut};
 
 use crate::body::BodySize;
 use crate::config::ServiceConfig;
@@ -95,15 +95,6 @@ pub(crate) trait MessageType: Sized {
                 }
             }
             BodySize::Sized(len) => helpers::write_content_length(len, dst),
-            BodySize::Sized64(len) => {
-                if camel_case {
-                    dst.put_slice(b"\r\nContent-Length: ");
-                } else {
-                    dst.put_slice(b"\r\ncontent-length: ");
-                }
-                #[allow(clippy::write_with_newline)]
-                write!(dst.writer(), "{}\r\n", len)?;
-            }
             BodySize::None => dst.put_slice(b"\r\n"),
         }
 
@@ -138,89 +129,133 @@ pub(crate) trait MessageType: Sized {
             .chain(extra_headers.inner.iter());
 
         // write headers
-        let mut pos = 0;
+
         let mut has_date = false;
-        let mut remaining = dst.capacity() - dst.len();
+
         let mut buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
+        let mut remaining = dst.capacity() - dst.len();
+
+        // tracks bytes written since last buffer resize
+        // since buf is a raw pointer to a bytes container storage but is written to without the
+        // container's knowledge, this is used to sync the containers cursor after data is written
+        let mut pos = 0;
+
         for (key, value) in headers {
             match *key {
                 CONNECTION => continue,
                 TRANSFER_ENCODING | CONTENT_LENGTH if skip_len => continue,
-                DATE => {
-                    has_date = true;
-                }
+                DATE => has_date = true,
                 _ => (),
             }
+
             let k = key.as_str().as_bytes();
+            let k_len = k.len();
+
             match value {
                 map::Value::One(ref val) => {
                     let v = val.as_ref();
                     let v_len = v.len();
-                    let k_len = k.len();
+
+                    // key length + value length + colon + space + \r\n
                     let len = k_len + v_len + 4;
+
                     if len > remaining {
+                        // not enough room in buffer for this header; reserve more space
+
+                        // SAFETY: all the bytes written up to position "pos" are initialized
+                        // the written byte count and pointer advancement are kept in sync
                         unsafe {
                             dst.advance_mut(pos);
                         }
+
                         pos = 0;
                         dst.reserve(len * 2);
                         remaining = dst.capacity() - dst.len();
+
+                        // re-assign buf raw pointer since it's possible that the buffer was
+                        // reallocated and/or resized
                         buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
                     }
-                    // use upper Camel-Case
+
+                    // SAFETY: on each write, it is enough to ensure that the advancement of the
+                    // cursor matches the number of bytes written
                     unsafe {
+                        // use upper Camel-Case
                         if camel_case {
                             write_camel_case(k, from_raw_parts_mut(buf, k_len))
                         } else {
                             write_data(k, buf, k_len)
                         }
+
                         buf = buf.add(k_len);
+
                         write_data(b": ", buf, 2);
                         buf = buf.add(2);
+
                         write_data(v, buf, v_len);
                         buf = buf.add(v_len);
+
                         write_data(b"\r\n", buf, 2);
                         buf = buf.add(2);
-                        pos += len;
-                        remaining -= len;
                     }
+
+                    pos += len;
+                    remaining -= len;
                 }
+
                 map::Value::Multi(ref vec) => {
                     for val in vec {
                         let v = val.as_ref();
                         let v_len = v.len();
-                        let k_len = k.len();
                         let len = k_len + v_len + 4;
+
                         if len > remaining {
+                            // SAFETY: all the bytes written up to position "pos" are initialized
+                            // the written byte count and pointer advancement are kept in sync
                             unsafe {
                                 dst.advance_mut(pos);
                             }
                             pos = 0;
                             dst.reserve(len * 2);
                             remaining = dst.capacity() - dst.len();
+
+                            // re-assign buf raw pointer since it's possible that the buffer was
+                            // reallocated and/or resized
                             buf = dst.bytes_mut().as_mut_ptr() as *mut u8;
                         }
-                        // use upper Camel-Case
+
+                        // SAFETY: on each write, it is enough to ensure that the advancement of
+                        // the cursor matches the number of bytes written
                         unsafe {
                             if camel_case {
                                 write_camel_case(k, from_raw_parts_mut(buf, k_len));
                             } else {
                                 write_data(k, buf, k_len);
                             }
+
                             buf = buf.add(k_len);
+
                             write_data(b": ", buf, 2);
                             buf = buf.add(2);
+
                             write_data(v, buf, v_len);
                             buf = buf.add(v_len);
+
                             write_data(b"\r\n", buf, 2);
                             buf = buf.add(2);
                         };
+
                         pos += len;
                         remaining -= len;
                     }
                 }
             }
         }
+
+        // final cursor synchronization with the bytes container
+        //
+        // SAFETY: all the bytes written up to position "pos" are initialized
+        // the written byte count and pointer advancement are kept in sync
         unsafe {
             dst.advance_mut(pos);
         }
@@ -338,8 +373,7 @@ impl<T: MessageType> MessageEncoder<T> {
         if !head {
             self.te = match length {
                 BodySize::Empty => TransferEncoding::empty(),
-                BodySize::Sized(len) => TransferEncoding::length(len as u64),
-                BodySize::Sized64(len) => TransferEncoding::length(len),
+                BodySize::Sized(len) => TransferEncoding::length(len),
                 BodySize::Stream => {
                     if message.chunked() && !stream {
                         TransferEncoding::chunked()
@@ -487,7 +521,10 @@ impl<'a> io::Write for Writer<'a> {
     }
 }
 
+/// # Safety
+/// Callers must ensure that the given length matches given value length.
 unsafe fn write_data(value: &[u8], buf: *mut u8, len: usize) {
+    debug_assert_eq!(value.len(), len);
     copy_nonoverlapping(value.as_ptr(), buf, len);
 }
 
@@ -579,19 +616,6 @@ mod tests {
         let data =
             String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
         assert!(data.contains("Transfer-Encoding: chunked\r\n"));
-        assert!(data.contains("Content-Type: plain/text\r\n"));
-        assert!(data.contains("Date: date\r\n"));
-
-        let _ = head.encode_headers(
-            &mut bytes,
-            Version::HTTP_11,
-            BodySize::Sized64(100),
-            ConnectionType::KeepAlive,
-            &ServiceConfig::default(),
-        );
-        let data =
-            String::from_utf8(Vec::from(bytes.split().freeze().as_ref())).unwrap();
-        assert!(data.contains("Content-Length: 100\r\n"));
         assert!(data.contains("Content-Type: plain/text\r\n"));
         assert!(data.contains("Date: date\r\n"));
 

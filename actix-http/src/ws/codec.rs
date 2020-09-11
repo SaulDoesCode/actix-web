@@ -91,8 +91,7 @@ impl Codec {
     }
 }
 
-impl Encoder for Codec {
-    type Item = Message;
+impl Encoder<Message> for Codec {
     type Error = ProtocolError;
 
     fn encode(&mut self, item: Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
@@ -137,7 +136,7 @@ impl Encoder for Codec {
                         Parser::write_message(
                             dst,
                             &data[..],
-                            OpCode::Binary,
+                            OpCode::Text,
                             false,
                             !self.flags.contains(Flags::SERVER),
                         )
@@ -151,7 +150,7 @@ impl Encoder for Codec {
                         Parser::write_message(
                             dst,
                             &data[..],
-                            OpCode::Text,
+                            OpCode::Binary,
                             false,
                             !self.flags.contains(Flags::SERVER),
                         )

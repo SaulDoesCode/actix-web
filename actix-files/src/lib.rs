@@ -1,6 +1,8 @@
-#![allow(clippy::borrow_interior_mutable_const, clippy::type_complexity)]
-
 //! Static files support
+
+#![deny(rust_2018_idioms)]
+#![allow(clippy::borrow_interior_mutable_const)]
+
 use std::cell::RefCell;
 use std::fmt::Write;
 use std::fs::{DirEntry, File};
@@ -24,9 +26,8 @@ use actix_web::http::header::{self, DispositionType};
 use actix_web::http::Method;
 use actix_web::{web, FromRequest, HttpRequest, HttpResponse};
 use bytes::Bytes;
-use futures::future::{ok, ready, Either, FutureExt, LocalBoxFuture, Ready};
-use futures::Stream;
-use mime;
+use futures_core::Stream;
+use futures_util::future::{ok, ready, Either, FutureExt, LocalBoxFuture, Ready};
 use mime_guess::from_ext;
 use percent_encoding::{utf8_percent_encode, CONTROLS};
 use v_htmlescape::escape as escape_html_entity;
@@ -63,6 +64,7 @@ pub struct ChunkedReadFile {
     size: u64,
     offset: u64,
     file: Option<File>,
+    #[allow(clippy::type_complexity)]
     fut:
         Option<LocalBoxFuture<'static, Result<(File, Bytes), BlockingError<io::Error>>>>,
     counter: u64,
@@ -73,7 +75,7 @@ impl Stream for ChunkedReadFile {
 
     fn poll_next(
         mut self: Pin<&mut Self>,
-        cx: &mut Context,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         if let Some(ref mut fut) = self.fut {
             return match Pin::new(fut).poll(cx) {
@@ -225,7 +227,7 @@ fn directory_listing(
     ))
 }
 
-type MimeOverride = dyn Fn(&mime::Name) -> DispositionType;
+type MimeOverride = dyn Fn(&mime::Name<'_>) -> DispositionType;
 
 /// Static files handling
 ///
@@ -233,12 +235,10 @@ type MimeOverride = dyn Fn(&mime::Name) -> DispositionType;
 ///
 /// ```rust
 /// use actix_web::App;
-/// use actix_files as fs;
+/// use actix_files::Files;
 ///
-/// fn main() {
-///     let app = App::new()
-///         .service(fs::Files::new("/static", "."));
-/// }
+/// let app = App::new()
+///     .service(Files::new("/static", "."));
 /// ```
 pub struct Files {
     path: String,
@@ -250,6 +250,8 @@ pub struct Files {
     renderer: Rc<DirectoryRenderer>,
     mime_override: Option<Rc<MimeOverride>>,
     file_flags: named::Flags,
+    // FIXME: Should re-visit later.
+    #[allow(clippy::redundant_allocation)]
     guards: Option<Rc<Box<dyn Guard>>>,
 }
 
@@ -329,7 +331,7 @@ impl Files {
     /// Specifies mime override callback
     pub fn mime_override<F>(mut self, f: F) -> Self
     where
-        F: Fn(&mime::Name) -> DispositionType + 'static,
+        F: Fn(&mime::Name<'_>) -> DispositionType + 'static,
     {
         self.mime_override = Some(Rc::new(f));
         self
@@ -462,10 +464,13 @@ pub struct FilesService {
     renderer: Rc<DirectoryRenderer>,
     mime_override: Option<Rc<MimeOverride>>,
     file_flags: named::Flags,
+    // FIXME: Should re-visit later.
+    #[allow(clippy::redundant_allocation)]
     guards: Option<Rc<Box<dyn Guard>>>,
 }
 
 impl FilesService {
+    #[allow(clippy::type_complexity)]
     fn handle_err(
         &mut self,
         e: io::Error,
@@ -487,12 +492,13 @@ impl Service for FilesService {
     type Request = ServiceRequest;
     type Response = ServiceResponse;
     type Error = Error;
+    #[allow(clippy::type_complexity)]
     type Future = Either<
         Ready<Result<Self::Response, Self::Error>>,
         LocalBoxFuture<'static, Result<Self::Response, Self::Error>>,
     >;
 
-    fn poll_ready(&mut self, _: &mut Context) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
@@ -501,11 +507,8 @@ impl Service for FilesService {
             // execute user defined guards
             (**guard).check(req.head())
         } else {
-            // default behaviour
-            match *req.method() {
-                Method::HEAD | Method::GET => true,
-                _ => false,
-            }
+            // default behavior
+            matches!(*req.method(), Method::HEAD | Method::GET)
         };
 
         if !is_method_valid {
@@ -521,7 +524,7 @@ impl Service for FilesService {
             Err(e) => return Either::Left(ok(req.error_response(e))),
         };
 
-        // full filepath
+        // full file path
         let path = match self.directory.join(&real_path.0).canonicalize() {
             Ok(path) => path,
             Err(e) => return self.handle_err(e, req),
@@ -898,7 +901,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_mime_override() {
-        fn all_attachment(_: &mime::Name) -> DispositionType {
+        fn all_attachment(_: &mime::Name<'_>) -> DispositionType {
             DispositionType::Attachment
         }
 
@@ -952,135 +955,82 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_named_file_content_range_headers() {
-        let mut srv = test::init_service(
-            App::new().service(Files::new("/test", ".").index_file("tests/test.binary")),
-        )
-        .await;
+        let srv = test::start(|| App::new().service(Files::new("/", ".")));
 
         // Valid range header
-        let request = TestRequest::get()
-            .uri("/t%65st/tests/test.binary")
+        let response = srv
+            .get("/tests/test.binary")
             .header(header::RANGE, "bytes=10-20")
-            .to_request();
-
-        let response = test::call_service(&mut srv, request).await;
-        let contentrange = response
-            .headers()
-            .get(header::CONTENT_RANGE)
-            .unwrap()
-            .to_str()
+            .send()
+            .await
             .unwrap();
-
-        assert_eq!(contentrange, "bytes 10-20/100");
+        let content_range = response.headers().get(header::CONTENT_RANGE).unwrap();
+        assert_eq!(content_range.to_str().unwrap(), "bytes 10-20/100");
 
         // Invalid range header
-        let request = TestRequest::get()
-            .uri("/t%65st/tests/test.binary")
+        let response = srv
+            .get("/tests/test.binary")
             .header(header::RANGE, "bytes=10-5")
-            .to_request();
-        let response = test::call_service(&mut srv, request).await;
-
-        let contentrange = response
-            .headers()
-            .get(header::CONTENT_RANGE)
-            .unwrap()
-            .to_str()
+            .send()
+            .await
             .unwrap();
-
-        assert_eq!(contentrange, "bytes */100");
+        let content_range = response.headers().get(header::CONTENT_RANGE).unwrap();
+        assert_eq!(content_range.to_str().unwrap(), "bytes */100");
     }
 
     #[actix_rt::test]
     async fn test_named_file_content_length_headers() {
-        // use actix_web::body::{MessageBody, ResponseBody};
-
-        let mut srv = test::init_service(
-            App::new().service(Files::new("test", ".").index_file("tests/test.binary")),
-        )
-        .await;
+        let srv = test::start(|| App::new().service(Files::new("/", ".")));
 
         // Valid range header
-        let request = TestRequest::get()
-            .uri("/t%65st/tests/test.binary")
+        let response = srv
+            .get("/tests/test.binary")
             .header(header::RANGE, "bytes=10-20")
-            .to_request();
-        let _response = test::call_service(&mut srv, request).await;
+            .send()
+            .await
+            .unwrap();
+        let content_length = response.headers().get(header::CONTENT_LENGTH).unwrap();
+        assert_eq!(content_length.to_str().unwrap(), "11");
 
-        // let contentlength = response
-        //     .headers()
-        //     .get(header::CONTENT_LENGTH)
-        //     .unwrap()
-        //     .to_str()
-        //     .unwrap();
-        // assert_eq!(contentlength, "11");
-
-        // Invalid range header
-        let request = TestRequest::get()
-            .uri("/t%65st/tests/test.binary")
-            .header(header::RANGE, "bytes=10-8")
-            .to_request();
-        let response = test::call_service(&mut srv, request).await;
-        assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        // Valid range header, starting from 0
+        let response = srv
+            .get("/tests/test.binary")
+            .header(header::RANGE, "bytes=0-20")
+            .send()
+            .await
+            .unwrap();
+        let content_length = response.headers().get(header::CONTENT_LENGTH).unwrap();
+        assert_eq!(content_length.to_str().unwrap(), "21");
 
         // Without range header
-        let request = TestRequest::get()
-            .uri("/t%65st/tests/test.binary")
-            // .no_default_headers()
-            .to_request();
-        let _response = test::call_service(&mut srv, request).await;
+        let mut response = srv.get("/tests/test.binary").send().await.unwrap();
+        let content_length = response.headers().get(header::CONTENT_LENGTH).unwrap();
+        assert_eq!(content_length.to_str().unwrap(), "100");
 
-        // let contentlength = response
-        //     .headers()
-        //     .get(header::CONTENT_LENGTH)
-        //     .unwrap()
-        //     .to_str()
-        //     .unwrap();
-        // assert_eq!(contentlength, "100");
+        // Should be no transfer-encoding
+        let transfer_encoding = response.headers().get(header::TRANSFER_ENCODING);
+        assert!(transfer_encoding.is_none());
 
-        // chunked
-        let request = TestRequest::get()
-            .uri("/t%65st/tests/test.binary")
-            .to_request();
-        let response = test::call_service(&mut srv, request).await;
-
-        // with enabled compression
-        // {
-        //     let te = response
-        //         .headers()
-        //         .get(header::TRANSFER_ENCODING)
-        //         .unwrap()
-        //         .to_str()
-        //         .unwrap();
-        //     assert_eq!(te, "chunked");
-        // }
-
-        let bytes = test::read_body(response).await;
+        // Check file contents
+        let bytes = response.body().await.unwrap();
         let data = Bytes::from(fs::read("tests/test.binary").unwrap());
         assert_eq!(bytes, data);
     }
 
     #[actix_rt::test]
     async fn test_head_content_length_headers() {
-        let mut srv = test::init_service(
-            App::new().service(Files::new("test", ".").index_file("tests/test.binary")),
-        )
-        .await;
+        let srv = test::start(|| App::new().service(Files::new("/", ".")));
 
-        // Valid range header
-        let request = TestRequest::default()
-            .method(Method::HEAD)
-            .uri("/t%65st/tests/test.binary")
-            .to_request();
-        let _response = test::call_service(&mut srv, request).await;
+        let response = srv.head("/tests/test.binary").send().await.unwrap();
 
-        // TODO: fix check
-        // let contentlength = response
-        //     .headers()
-        //     .get(header::CONTENT_LENGTH)
-        //     .unwrap()
-        //     .to_str()
-        //     .unwrap();
-        // assert_eq!(contentlength, "100");
+        let content_length = response
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        assert_eq!(content_length, "100");
     }
 
     #[actix_rt::test]
@@ -1140,12 +1090,10 @@ mod tests {
     #[actix_rt::test]
     async fn test_named_file_content_encoding() {
         let mut srv = test::init_service(App::new().wrap(Compress::default()).service(
-            web::resource("/").to(|| {
-                async {
-                    NamedFile::open("Cargo.toml")
-                        .unwrap()
-                        .set_content_encoding(header::ContentEncoding::Identity)
-                }
+            web::resource("/").to(|| async {
+                NamedFile::open("Cargo.toml")
+                    .unwrap()
+                    .set_content_encoding(header::ContentEncoding::Identity)
             }),
         ))
         .await;
@@ -1162,12 +1110,10 @@ mod tests {
     #[actix_rt::test]
     async fn test_named_file_content_encoding_gzip() {
         let mut srv = test::init_service(App::new().wrap(Compress::default()).service(
-            web::resource("/").to(|| {
-                async {
-                    NamedFile::open("Cargo.toml")
-                        .unwrap()
-                        .set_content_encoding(header::ContentEncoding::Gzip)
-                }
+            web::resource("/").to(|| async {
+                NamedFile::open("Cargo.toml")
+                    .unwrap()
+                    .set_content_encoding(header::ContentEncoding::Gzip)
             }),
         ))
         .await;

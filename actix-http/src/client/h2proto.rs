@@ -37,10 +37,10 @@ where
     trace!("Sending client request: {:?} {:?}", head, body.size());
     let head_req = head.as_ref().method == Method::HEAD;
     let length = body.size();
-    let eof = match length {
-        BodySize::None | BodySize::Empty | BodySize::Sized(0) => true,
-        _ => false,
-    };
+    let eof = matches!(
+        length,
+        BodySize::None | BodySize::Empty | BodySize::Sized(0)
+    );
 
     let mut req = Request::new(());
     *req.uri_mut() = head.as_ref().uri.clone();
@@ -61,10 +61,6 @@ where
             .headers_mut()
             .insert(CONTENT_LENGTH, HeaderValue::from_static("0")),
         BodySize::Sized(len) => req.headers_mut().insert(
-            CONTENT_LENGTH,
-            HeaderValue::try_from(format!("{}", len)).unwrap(),
-        ),
-        BodySize::Sized64(len) => req.headers_mut().insert(
             CONTENT_LENGTH,
             HeaderValue::try_from(format!("{}", len)).unwrap(),
         ),

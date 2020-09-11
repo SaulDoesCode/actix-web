@@ -1,11 +1,12 @@
 use std::cell::{Ref, RefMut};
 use std::fmt;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use bytes::{Bytes, BytesMut};
-use futures_core::{ready, Future, Stream};
+use futures_core::{ready, Stream};
 
 use actix_http::cookie::Cookie;
 use actix_http::error::{CookieParseError, PayloadError};
@@ -401,14 +402,12 @@ mod tests {
 
     fn json_eq(err: JsonPayloadError, other: JsonPayloadError) -> bool {
         match err {
-            JsonPayloadError::Payload(PayloadError::Overflow) => match other {
-                JsonPayloadError::Payload(PayloadError::Overflow) => true,
-                _ => false,
-            },
-            JsonPayloadError::ContentType => match other {
-                JsonPayloadError::ContentType => true,
-                _ => false,
-            },
+            JsonPayloadError::Payload(PayloadError::Overflow) => {
+                matches!(other, JsonPayloadError::Payload(PayloadError::Overflow))
+            }
+            JsonPayloadError::ContentType => {
+                matches!(other, JsonPayloadError::ContentType)
+            }
             _ => false,
         }
     }

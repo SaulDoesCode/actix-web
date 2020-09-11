@@ -12,7 +12,6 @@ use actix_router::{IntoPattern, Path, Resource, ResourceDef, Url};
 use actix_service::{IntoServiceFactory, ServiceFactory};
 
 use crate::config::{AppConfig, AppService};
-use crate::data::Data;
 use crate::dev::insert_slash;
 use crate::guard::Guard;
 use crate::info::ConnectionInfo;
@@ -69,7 +68,7 @@ impl ServiceRequest {
 
     /// Construct request from parts.
     ///
-    /// `ServiceRequest` can be re-constructed only if `req` hasnt been cloned.
+    /// `ServiceRequest` can be re-constructed only if `req` hasn't been cloned.
     pub fn from_parts(
         mut req: HttpRequest,
         pl: Payload,
@@ -196,6 +195,18 @@ impl ServiceRequest {
         self.0.match_info()
     }
 
+    /// Counterpart to [`HttpRequest::match_name`](../struct.HttpRequest.html#method.match_name).
+    #[inline]
+    pub fn match_name(&self) -> Option<&str> {
+        self.0.match_name()
+    }
+
+    /// Counterpart to [`HttpRequest::match_pattern`](../struct.HttpRequest.html#method.match_pattern).
+    #[inline]
+    pub fn match_pattern(&self) -> Option<String> {
+        self.0.match_pattern()
+    }
+
     #[inline]
     /// Get a mutable reference to the Path parameters.
     pub fn match_info_mut(&mut self) -> &mut Path<Url> {
@@ -214,14 +225,15 @@ impl ServiceRequest {
         self.0.app_config()
     }
 
-    /// Get an application data stored with `App::data()` method during
-    /// application configuration.
-    pub fn app_data<T: 'static>(&self) -> Option<Data<T>> {
-        if let Some(st) = (self.0).0.app_data.get::<Data<T>>() {
-            Some(st.clone())
-        } else {
-            None
+    /// Counterpart to [`HttpRequest::app_data`](../struct.HttpRequest.html#method.app_data).
+    pub fn app_data<T: 'static>(&self) -> Option<&T> {
+        for container in (self.0).0.app_data.iter().rev() {
+            if let Some(data) = container.get::<T>() {
+                return Some(data);
+            }
         }
+
+        None
     }
 
     /// Set request payload.
@@ -230,9 +242,12 @@ impl ServiceRequest {
     }
 
     #[doc(hidden)]
-    /// Set new app data container
-    pub fn set_data_container(&mut self, extensions: Rc<Extensions>) {
-        Rc::get_mut(&mut (self.0).0).unwrap().app_data = extensions;
+    /// Add app data container to request's resolution set.
+    pub fn add_data_container(&mut self, extensions: Rc<Extensions>) {
+        Rc::get_mut(&mut (self.0).0)
+            .unwrap()
+            .app_data
+            .push(extensions);
     }
 }
 
@@ -510,7 +525,7 @@ where
         let guards = if self.guards.is_empty() {
             None
         } else {
-            Some(std::mem::replace(&mut self.guards, Vec::new()))
+            Some(std::mem::take(&mut self.guards))
         };
 
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
@@ -531,7 +546,7 @@ mod tests {
     use crate::test::{init_service, TestRequest};
     use crate::{guard, http, web, App, HttpResponse};
     use actix_service::Service;
-    use futures::future::ok;
+    use futures_util::future::ok;
 
     #[test]
     fn test_service_request() {
@@ -577,6 +592,27 @@ mod tests {
             .to_request();
         let resp = srv.call(req).await.unwrap();
         assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    #[actix_rt::test]
+    async fn test_service_data() {
+        let mut srv = init_service(
+            App::new()
+                .data(42u32)
+                .service(web::service("/test").name("test").finish(
+                    |req: ServiceRequest| {
+                        assert_eq!(
+                            req.app_data::<web::Data<u32>>().unwrap().as_ref(),
+                            &42
+                        );
+                        ok(req.into_response(HttpResponse::Ok().finish()))
+                    },
+                )),
+        )
+        .await;
+        let req = TestRequest::with_uri("/test").to_request();
+        let resp = srv.call(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
     }
 
     #[test]

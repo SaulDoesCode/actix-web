@@ -2,10 +2,10 @@
 use std::task::{Context, Poll};
 
 use actix_service::{Service, Transform};
-use futures::future::{ok, Either, FutureExt, LocalBoxFuture};
+use futures_util::future::{ok, Either, FutureExt, LocalBoxFuture};
 
 /// `Middleware` for conditionally enables another middleware.
-/// The controled middleware must not change the `Service` interfaces.
+/// The controlled middleware must not change the `Service` interfaces.
 /// This means you cannot control such middlewares like `Logger` or `Compress`.
 ///
 /// ## Usage
@@ -17,7 +17,7 @@ use futures::future::{ok, Either, FutureExt, LocalBoxFuture};
 /// # fn main() {
 /// let enable_normalize = std::env::var("NORMALIZE_PATH") == Ok("true".into());
 /// let app = App::new()
-///     .wrap(Condition::new(enable_normalize, NormalizePath));
+///     .wrap(Condition::new(enable_normalize, NormalizePath::default()));
 /// # }
 /// ```
 pub struct Condition<T> {

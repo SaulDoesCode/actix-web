@@ -4,8 +4,8 @@ use actix_codec::Framed;
 use actix_http::{body::BodySize, h1, ws, Error, HttpService, Request, Response};
 use actix_http_test::test_server;
 use bytes::Bytes;
-use futures::future::ok;
-use futures::{SinkExt, StreamExt};
+use futures_util::future::ok;
+use futures_util::{SinkExt, StreamExt};
 
 async fn ws_service(req: ws::Frame) -> Result<ws::Message, io::Error> {
     match req {
@@ -32,7 +32,7 @@ async fn test_simple() {
                         .await?;
 
                     // start websocket service
-                    let framed = framed.into_framed(ws::Codec::new());
+                    let framed = framed.replace_codec(ws::Codec::new());
                     ws::Dispatcher::with(framed, ws_service).await
                 }
             })

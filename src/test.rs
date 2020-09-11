@@ -18,12 +18,12 @@ use actix_service::{
 use awc::error::PayloadError;
 use awc::{Client, ClientRequest, ClientResponse, Connector};
 use bytes::{Bytes, BytesMut};
-use futures::future::ok;
-use futures::stream::{Stream, StreamExt};
-use net2::TcpBuilder;
+use futures_core::Stream;
+use futures_util::future::ok;
+use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use serde_json;
+use socket2::{Domain, Protocol, Socket, Type};
 
 pub use actix_http::test::TestBuffer;
 
@@ -88,8 +88,30 @@ where
     >,
     S::InitError: std::fmt::Debug,
 {
+    try_init_service(app)
+        .await
+        .expect("service initilization failed")
+}
+
+/// Fallible version of init_service that allows testing data factory errors.
+pub(crate) async fn try_init_service<R, S, B, E>(
+    app: R,
+) -> Result<
+    impl Service<Request = Request, Response = ServiceResponse<B>, Error = E>,
+    S::InitError,
+>
+where
+    R: IntoServiceFactory<S>,
+    S: ServiceFactory<
+        Config = AppConfig,
+        Request = Request,
+        Response = ServiceResponse<B>,
+        Error = E,
+    >,
+    S::InitError: std::fmt::Debug,
+{
     let srv = app.into_factory();
-    srv.new_service(AppConfig::default()).await.unwrap()
+    srv.new_service(AppConfig::default()).await
 }
 
 /// Calls service and waits for response future completion.
@@ -201,6 +223,54 @@ where
         bytes.extend_from_slice(&item.unwrap());
     }
     bytes.freeze()
+}
+
+/// Helper function that returns a deserialized response body of a ServiceResponse.
+///
+/// ```rust
+/// use actix_web::{App, test, web, HttpResponse, http::header};
+/// use serde::{Serialize, Deserialize};
+///
+/// #[derive(Serialize, Deserialize)]
+/// pub struct Person {
+///     id: String,
+///     name: String,
+/// }
+///
+/// #[actix_rt::test]
+/// async fn test_post_person() {
+///     let mut app = test::init_service(
+///         App::new().service(
+///             web::resource("/people")
+///                 .route(web::post().to(|person: web::Json<Person>| async {
+///                     HttpResponse::Ok()
+///                         .json(person.into_inner())})
+///                     ))
+///     ).await;
+///
+///     let payload = r#"{"id":"12345","name":"User name"}"#.as_bytes();
+///
+///     let resp = test::TestRequest::post()
+///         .uri("/people")
+///         .header(header::CONTENT_TYPE, "application/json")
+///         .set_payload(payload)
+///         .send_request(&mut app)
+///         .await;
+///
+///     assert!(resp.status().is_success());
+///
+///     let result: Person = test::read_body_json(resp).await;
+/// }
+/// ```
+pub async fn read_body_json<T, B>(res: ServiceResponse<B>) -> T
+where
+    B: MessageBody + Unpin,
+    T: DeserializeOwned,
+{
+    let body = read_body(res).await;
+
+    serde_json::from_slice(&body)
+        .unwrap_or_else(|_| panic!("read_response_json failed during deserialization"))
 }
 
 pub async fn load_stream<S>(mut stream: S) -> Result<Bytes, Error>
@@ -527,6 +597,16 @@ impl TestRequest {
 
         (req, payload)
     }
+
+    /// Complete request creation, calls service and waits for response future completion.
+    pub async fn send_request<S, B, E>(self, app: &mut S) -> S::Response
+    where
+        S: Service<Request = Request, Response = ServiceResponse<B>, Error = E>,
+        E: std::fmt::Debug,
+    {
+        let req = self.to_request();
+        call_service(app, req).await
+    }
 }
 
 /// Start test server with default configuration
@@ -742,7 +822,7 @@ where
             }
         };
 
-        Client::build().connector(connector).finish()
+        Client::builder().connector(connector).finish()
     };
 
     TestServer {
@@ -834,10 +914,11 @@ impl TestServerConfig {
 /// Get first available unused address
 pub fn unused_addr() -> net::SocketAddr {
     let addr: net::SocketAddr = "127.0.0.1:0".parse().unwrap();
-    let socket = TcpBuilder::new_v4().unwrap();
-    socket.bind(&addr).unwrap();
-    socket.reuse_address(true).unwrap();
-    let tcp = socket.to_tcp_listener().unwrap();
+    let socket =
+        Socket::new(Domain::ipv4(), Type::stream(), Some(Protocol::tcp())).unwrap();
+    socket.bind(&addr.into()).unwrap();
+    socket.set_reuse_address(true).unwrap();
+    let tcp = socket.into_tcp_listener();
     tcp.local_addr().unwrap()
 }
 
@@ -991,14 +1072,9 @@ mod tests {
         let mut app = init_service(
             App::new().service(
                 web::resource("/index.html")
-                    .route(web::put().to(|| async { HttpResponse::Ok().body("put!") }))
-                    .route(
-                        web::patch().to(|| async { HttpResponse::Ok().body("patch!") }),
-                    )
-                    .route(
-                        web::delete()
-                            .to(|| async { HttpResponse::Ok().body("delete!") }),
-                    ),
+                    .route(web::put().to(|| HttpResponse::Ok().body("put!")))
+                    .route(web::patch().to(|| HttpResponse::Ok().body("patch!")))
+                    .route(web::delete().to(|| HttpResponse::Ok().body("delete!"))),
             ),
         )
         .await;
@@ -1026,11 +1102,13 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_response() {
-        let mut app =
-            init_service(App::new().service(web::resource("/index.html").route(
-                web::post().to(|| async { HttpResponse::Ok().body("welcome!") }),
-            )))
-            .await;
+        let mut app = init_service(
+            App::new().service(
+                web::resource("/index.html")
+                    .route(web::post().to(|| HttpResponse::Ok().body("welcome!"))),
+            ),
+        )
+        .await;
 
         let req = TestRequest::post()
             .uri("/index.html")
@@ -1038,6 +1116,25 @@ mod tests {
             .to_request();
 
         let result = read_response(&mut app, req).await;
+        assert_eq!(result, Bytes::from_static(b"welcome!"));
+    }
+
+    #[actix_rt::test]
+    async fn test_send_request() {
+        let mut app = init_service(
+            App::new().service(
+                web::resource("/index.html")
+                    .route(web::get().to(|| HttpResponse::Ok().body("welcome!"))),
+            ),
+        )
+        .await;
+
+        let resp = TestRequest::get()
+            .uri("/index.html")
+            .send_request(&mut app)
+            .await;
+
+        let result = read_body(resp).await;
         assert_eq!(result, Bytes::from_static(b"welcome!"));
     }
 
@@ -1051,7 +1148,7 @@ mod tests {
     async fn test_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::Json<Person>| {
-                async { HttpResponse::Ok().json(person.into_inner()) }
+                HttpResponse::Ok().json(person.into_inner())
             }),
         )))
         .await;
@@ -1069,10 +1166,32 @@ mod tests {
     }
 
     #[actix_rt::test]
+    async fn test_body_json() {
+        let mut app = init_service(App::new().service(web::resource("/people").route(
+            web::post().to(|person: web::Json<Person>| {
+                HttpResponse::Ok().json(person.into_inner())
+            }),
+        )))
+        .await;
+
+        let payload = r#"{"id":"12345","name":"User name"}"#.as_bytes();
+
+        let resp = TestRequest::post()
+            .uri("/people")
+            .header(header::CONTENT_TYPE, "application/json")
+            .set_payload(payload)
+            .send_request(&mut app)
+            .await;
+
+        let result: Person = read_body_json(resp).await;
+        assert_eq!(&result.name, "User name");
+    }
+
+    #[actix_rt::test]
     async fn test_request_response_form() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::Form<Person>| {
-                async { HttpResponse::Ok().json(person.into_inner()) }
+                HttpResponse::Ok().json(person.into_inner())
             }),
         )))
         .await;
@@ -1098,7 +1217,7 @@ mod tests {
     async fn test_request_response_json() {
         let mut app = init_service(App::new().service(web::resource("/people").route(
             web::post().to(|person: web::Json<Person>| {
-                async { HttpResponse::Ok().json(person.into_inner()) }
+                HttpResponse::Ok().json(person.into_inner())
             }),
         )))
         .await;
@@ -1162,53 +1281,54 @@ mod tests {
         assert!(res.status().is_success());
     }
 
-/*
-
-    Comment out until actix decoupled of actix-http:
-    https://github.com/actix/actix/issues/321
-
-    use futures::FutureExt;
-
     #[actix_rt::test]
     async fn test_actor() {
-        use actix::Actor;
+        use crate::Error;
+        use actix::prelude::*;
 
         struct MyActor;
 
+        impl Actor for MyActor {
+            type Context = Context<Self>;
+        }
+
         struct Num(usize);
-        impl actix::Message for Num {
+
+        impl Message for Num {
             type Result = usize;
         }
-        impl actix::Actor for MyActor {
-            type Context = actix::Context<Self>;
-        }
-        impl actix::Handler<Num> for MyActor {
+
+        impl Handler<Num> for MyActor {
             type Result = usize;
+
             fn handle(&mut self, msg: Num, _: &mut Self::Context) -> Self::Result {
                 msg.0
             }
         }
 
+        let addr = MyActor.start();
 
-        let mut app = init_service(App::new().service(web::resource("/index.html").to(
-            move || {
-                addr.send(Num(1)).map(|res| match res {
-                    Ok(res) => {
-                        if res == 1 {
-                            Ok(HttpResponse::Ok())
-                        } else {
-                            Ok(HttpResponse::BadRequest())
-                        }
-                    }
-                    Err(err) => Err(err),
-                })
-            },
-        )))
-        .await;
+        async fn actor_handler(
+            addr: Data<Addr<MyActor>>,
+        ) -> Result<impl Responder, Error> {
+            // `?` operator tests "actors" feature flag on actix-http
+            let res = addr.send(Num(1)).await?;
 
-        let req = TestRequest::post().uri("/index.html").to_request();
+            if res == 1 {
+                Ok(HttpResponse::Ok())
+            } else {
+                Ok(HttpResponse::BadRequest())
+            }
+        }
+
+        let srv = App::new()
+            .data(addr.clone())
+            .service(web::resource("/").to(actor_handler));
+
+        let mut app = init_service(srv).await;
+
+        let req = TestRequest::post().uri("/").to_request();
         let res = app.call(req).await.unwrap();
         assert!(res.status().is_success());
     }
-*/
 }

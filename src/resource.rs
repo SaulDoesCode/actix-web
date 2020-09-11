@@ -11,7 +11,7 @@ use actix_service::boxed::{self, BoxService, BoxServiceFactory};
 use actix_service::{
     apply, apply_fn_factory, IntoServiceFactory, Service, ServiceFactory, Transform,
 };
-use futures::future::{ok, Either, LocalBoxFuture, Ready};
+use futures_util::future::{ok, Either, LocalBoxFuture, Ready};
 
 use crate::data::Data;
 use crate::dev::{insert_slash, AppService, HttpServiceFactory, ResourceDef};
@@ -46,7 +46,7 @@ type HttpNewService = BoxServiceFactory<(), ServiceRequest, ServiceResponse, Err
 /// ```
 ///
 /// If no matching route could be found, *405* response code get returned.
-/// Default behavior could be overriden with `default_resource()` method.
+/// Default behavior could be overridden with `default_resource()` method.
 pub struct Resource<T = ResourceEndpoint> {
     endpoint: T,
     rdef: Vec<String>,
@@ -196,9 +196,9 @@ where
         self.app_data(Data::new(data))
     }
 
-    /// Set or override application data.
+    /// Add resource data.
     ///
-    /// This method overrides data stored with [`App::app_data()`](#method.app_data)
+    /// Data of different types from parent contexts will still be accessible.
     pub fn app_data<U: 'static>(mut self, data: U) -> Self {
         if self.data.is_none() {
             self.data = Some(Extensions::new());
@@ -379,7 +379,7 @@ where
         let guards = if self.guards.is_empty() {
             None
         } else {
-            Some(std::mem::replace(&mut self.guards, Vec::new()))
+            Some(std::mem::take(&mut self.guards))
         };
         let mut rdef = if config.is_root() || !self.rdef.is_empty() {
             ResourceDef::new(insert_slash(self.rdef.clone()))
@@ -393,6 +393,7 @@ where
         if let Some(ref mut ext) = self.data {
             config.set_service_data(ext);
         }
+
         config.register_service(rdef, guards, self, None)
     }
 }
@@ -536,12 +537,15 @@ impl Service for ResourceService {
         for route in self.routes.iter_mut() {
             if route.check(&mut req) {
                 if let Some(ref data) = self.data {
-                    req.set_data_container(data.clone());
+                    req.add_data_container(data.clone());
                 }
                 return Either::Right(route.call(req));
             }
         }
         if let Some(ref mut default) = self.default {
+            if let Some(ref data) = self.data {
+                req.add_data_container(data.clone());
+            }
             Either::Right(default.call(req))
         } else {
             let req = req.into_parts().0;
@@ -584,7 +588,7 @@ mod tests {
 
     use actix_rt::time::delay_for;
     use actix_service::Service;
-    use futures::future::ok;
+    use futures_util::future::ok;
 
     use crate::http::{header, HeaderValue, Method, StatusCode};
     use crate::middleware::DefaultHeaders;
@@ -603,7 +607,7 @@ mod tests {
                             header::CONTENT_TYPE,
                             HeaderValue::from_static("0001"),
                         ))
-                        .route(web::get().to(|| HttpResponse::Ok())),
+                        .route(web::get().to(HttpResponse::Ok)),
                 ),
             )
             .await;
@@ -633,7 +637,7 @@ mod tests {
                             })
                         }
                     })
-                    .route(web::get().to(|| HttpResponse::Ok())),
+                    .route(web::get().to(HttpResponse::Ok)),
             ),
         )
         .await;
@@ -649,11 +653,9 @@ mod tests {
     #[actix_rt::test]
     async fn test_to() {
         let mut srv =
-            init_service(App::new().service(web::resource("/test").to(|| {
-                async {
-                    delay_for(Duration::from_millis(100)).await;
-                    Ok::<_, Error>(HttpResponse::Ok())
-                }
+            init_service(App::new().service(web::resource("/test").to(|| async {
+                delay_for(Duration::from_millis(100)).await;
+                Ok::<_, Error>(HttpResponse::Ok())
             })))
             .await;
         let req = TestRequest::with_uri("/test").to_request();
@@ -682,9 +684,7 @@ mod tests {
     async fn test_default_resource() {
         let mut srv = init_service(
             App::new()
-                .service(
-                    web::resource("/test").route(web::get().to(|| HttpResponse::Ok())),
-                )
+                .service(web::resource("/test").route(web::get().to(HttpResponse::Ok)))
                 .default_service(|r: ServiceRequest| {
                     ok(r.into_response(HttpResponse::BadRequest()))
                 }),
@@ -703,7 +703,7 @@ mod tests {
         let mut srv = init_service(
             App::new().service(
                 web::resource("/test")
-                    .route(web::get().to(|| HttpResponse::Ok()))
+                    .route(web::get().to(HttpResponse::Ok))
                     .default_service(|r: ServiceRequest| {
                         ok(r.into_response(HttpResponse::BadRequest()))
                     }),
@@ -729,17 +729,17 @@ mod tests {
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Get())
-                        .to(|| HttpResponse::Ok()),
+                        .to(HttpResponse::Ok),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Put())
-                        .to(|| HttpResponse::Created()),
+                        .to(HttpResponse::Created),
                 )
                 .service(
                     web::resource("/test/{p}")
                         .guard(guard::Delete())
-                        .to(|| HttpResponse::NoContent()),
+                        .to(HttpResponse::NoContent),
                 ),
         )
         .await;
@@ -781,11 +781,31 @@ mod tests {
                              data3: web::Data<f64>| {
                                 assert_eq!(**data1, 10);
                                 assert_eq!(**data2, '*');
-                                assert_eq!(**data3, 1.0);
+                                let error = std::f64::EPSILON;
+                                assert!((**data3 - 1.0).abs() < error);
                                 HttpResponse::Ok()
                             },
                         ),
                 ),
+        )
+        .await;
+
+        let req = TestRequest::get().uri("/test").to_request();
+        let resp = call_service(&mut srv, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[actix_rt::test]
+    async fn test_data_default_service() {
+        let mut srv = init_service(
+            App::new().data(1usize).service(
+                web::resource("/test")
+                    .data(10usize)
+                    .default_service(web::to(|data: web::Data<usize>| {
+                        assert_eq!(**data, 10);
+                        HttpResponse::Ok()
+                    })),
+            ),
         )
         .await;
 

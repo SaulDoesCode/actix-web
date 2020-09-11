@@ -472,7 +472,9 @@ impl ResponseBuilder {
 
     /// Disable chunked transfer encoding for HTTP/1.1 streaming responses.
     #[inline]
-    pub fn no_chunking(&mut self) -> &mut Self {
+    pub fn no_chunking(&mut self, len: u64) -> &mut Self {
+        self.header(header::CONTENT_LENGTH, len);
+
         if let Some(parts) = parts(&mut self.head, &self.err) {
             parts.no_chunking(true);
         }
@@ -495,12 +497,6 @@ impl ResponseBuilder {
             };
         }
         self
-    }
-
-    /// Set content length
-    #[inline]
-    pub fn content_length(&mut self, len: u64) -> &mut Self {
-        self.header(header::CONTENT_LENGTH, len)
     }
 
     /// Set a cookie
@@ -881,7 +877,7 @@ mod tests {
                     .domain("www.rust-lang.org")
                     .path("/test")
                     .http_only(true)
-                    .max_age_time(time::Duration::days(1))
+                    .max_age(time::Duration::days(1))
                     .finish(),
             )
             .del_cookie(&cookies[1])

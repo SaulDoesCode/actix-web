@@ -6,7 +6,7 @@ use std::{fmt, mem};
 use bytes::{Bytes, BytesMut};
 use futures_core::Stream;
 use futures_util::ready;
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 use crate::error::Error;
 
@@ -15,20 +15,13 @@ use crate::error::Error;
 pub enum BodySize {
     None,
     Empty,
-    Sized(usize),
-    Sized64(u64),
+    Sized(u64),
     Stream,
 }
 
 impl BodySize {
     pub fn is_eof(&self) -> bool {
-        match self {
-            BodySize::None
-            | BodySize::Empty
-            | BodySize::Sized(0)
-            | BodySize::Sized64(0) => true,
-            _ => false,
-        }
+        matches!(self, BodySize::None | BodySize::Empty | BodySize::Sized(0))
     }
 }
 
@@ -72,7 +65,7 @@ impl<T: MessageBody + Unpin> MessageBody for Box<T> {
     }
 }
 
-#[pin_project]
+#[pin_project(project = ResponseBodyProj)]
 pub enum ResponseBody<B> {
     Body(#[pin] B),
     Other(#[pin] Body),
@@ -111,15 +104,13 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
         }
     }
 
-    #[project]
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Error>>> {
-        #[project]
         match self.project() {
-            ResponseBody::Body(body) => body.poll_next(cx),
-            ResponseBody::Other(body) => body.poll_next(cx),
+            ResponseBodyProj::Body(body) => body.poll_next(cx),
+            ResponseBodyProj::Other(body) => body.poll_next(cx),
         }
     }
 }
@@ -127,20 +118,18 @@ impl<B: MessageBody> MessageBody for ResponseBody<B> {
 impl<B: MessageBody> Stream for ResponseBody<B> {
     type Item = Result<Bytes, Error>;
 
-    #[project]
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        #[project]
         match self.project() {
-            ResponseBody::Body(body) => body.poll_next(cx),
-            ResponseBody::Other(body) => body.poll_next(cx),
+            ResponseBodyProj::Body(body) => body.poll_next(cx),
+            ResponseBodyProj::Other(body) => body.poll_next(cx),
         }
     }
 }
 
-#[pin_project]
+#[pin_project(project = BodyProj)]
 /// Represents various types of http message body.
 pub enum Body {
     /// Empty response. `Content-Length` header is not set.
@@ -170,29 +159,27 @@ impl MessageBody for Body {
         match self {
             Body::None => BodySize::None,
             Body::Empty => BodySize::Empty,
-            Body::Bytes(ref bin) => BodySize::Sized(bin.len()),
+            Body::Bytes(ref bin) => BodySize::Sized(bin.len() as u64),
             Body::Message(ref body) => body.size(),
         }
     }
 
-    #[project]
     fn poll_next(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Bytes, Error>>> {
-        #[project]
         match self.project() {
-            Body::None => Poll::Ready(None),
-            Body::Empty => Poll::Ready(None),
-            Body::Bytes(ref mut bin) => {
+            BodyProj::None => Poll::Ready(None),
+            BodyProj::Empty => Poll::Ready(None),
+            BodyProj::Bytes(ref mut bin) => {
                 let len = bin.len();
                 if len == 0 {
                     Poll::Ready(None)
                 } else {
-                    Poll::Ready(Some(Ok(mem::replace(bin, Bytes::new()))))
+                    Poll::Ready(Some(Ok(mem::take(bin))))
                 }
             }
-            Body::Message(ref mut body) => Pin::new(body.as_mut()).poll_next(cx),
+            BodyProj::Message(ref mut body) => Pin::new(body.as_mut()).poll_next(cx),
         }
     }
 }
@@ -200,14 +187,8 @@ impl MessageBody for Body {
 impl PartialEq for Body {
     fn eq(&self, other: &Body) -> bool {
         match *self {
-            Body::None => match *other {
-                Body::None => true,
-                _ => false,
-            },
-            Body::Empty => match *other {
-                Body::Empty => true,
-                _ => false,
-            },
+            Body::None => matches!(*other, Body::None),
+            Body::Empty => matches!(*other, Body::Empty),
             Body::Bytes(ref b) => match *other {
                 Body::Bytes(ref b2) => b == b2,
                 _ => false,
@@ -297,7 +278,7 @@ where
 
 impl MessageBody for Bytes {
     fn size(&self) -> BodySize {
-        BodySize::Sized(self.len())
+        BodySize::Sized(self.len() as u64)
     }
 
     fn poll_next(
@@ -307,14 +288,14 @@ impl MessageBody for Bytes {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(mem::replace(self.get_mut(), Bytes::new()))))
+            Poll::Ready(Some(Ok(mem::take(self.get_mut()))))
         }
     }
 }
 
 impl MessageBody for BytesMut {
     fn size(&self) -> BodySize {
-        BodySize::Sized(self.len())
+        BodySize::Sized(self.len() as u64)
     }
 
     fn poll_next(
@@ -324,16 +305,14 @@ impl MessageBody for BytesMut {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(
-                mem::replace(self.get_mut(), BytesMut::new()).freeze()
-            )))
+            Poll::Ready(Some(Ok(mem::take(self.get_mut()).freeze())))
         }
     }
 }
 
 impl MessageBody for &'static str {
     fn size(&self) -> BodySize {
-        BodySize::Sized(self.len())
+        BodySize::Sized(self.len() as u64)
     }
 
     fn poll_next(
@@ -344,7 +323,7 @@ impl MessageBody for &'static str {
             Poll::Ready(None)
         } else {
             Poll::Ready(Some(Ok(Bytes::from_static(
-                mem::replace(self.get_mut(), "").as_ref(),
+                mem::take(self.get_mut()).as_ref(),
             ))))
         }
     }
@@ -352,7 +331,7 @@ impl MessageBody for &'static str {
 
 impl MessageBody for Vec<u8> {
     fn size(&self) -> BodySize {
-        BodySize::Sized(self.len())
+        BodySize::Sized(self.len() as u64)
     }
 
     fn poll_next(
@@ -362,17 +341,14 @@ impl MessageBody for Vec<u8> {
         if self.is_empty() {
             Poll::Ready(None)
         } else {
-            Poll::Ready(Some(Ok(Bytes::from(mem::replace(
-                self.get_mut(),
-                Vec::new(),
-            )))))
+            Poll::Ready(Some(Ok(Bytes::from(mem::take(self.get_mut())))))
         }
     }
 }
 
 impl MessageBody for String {
     fn size(&self) -> BodySize {
-        BodySize::Sized(self.len())
+        BodySize::Sized(self.len() as u64)
     }
 
     fn poll_next(
@@ -383,7 +359,7 @@ impl MessageBody for String {
             Poll::Ready(None)
         } else {
             Poll::Ready(Some(Ok(Bytes::from(
-                mem::replace(self.get_mut(), String::new()).into_bytes(),
+                mem::take(self.get_mut()).into_bytes(),
             ))))
         }
     }
@@ -463,7 +439,7 @@ where
     S: Stream<Item = Result<Bytes, Error>> + Unpin,
 {
     fn size(&self) -> BodySize {
-        BodySize::Sized64(self.size)
+        BodySize::Sized(self.size as u64)
     }
 
     /// Attempts to pull out the next value of the underlying [`Stream`].
@@ -489,9 +465,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::stream;
     use futures_util::future::poll_fn;
     use futures_util::pin_mut;
+    use futures_util::stream;
 
     impl Body {
         pub(crate) fn get_ref(&self) -> &[u8] {
@@ -625,10 +601,6 @@ mod tests {
 
     #[actix_rt::test]
     async fn test_body_eq() {
-        assert!(Body::None == Body::None);
-        assert!(Body::None != Body::Empty);
-        assert!(Body::Empty == Body::Empty);
-        assert!(Body::Empty != Body::None);
         assert!(
             Body::Bytes(Bytes::from_static(b"1"))
                 == Body::Bytes(Bytes::from_static(b"1"))
@@ -640,7 +612,7 @@ mod tests {
     async fn test_body_debug() {
         assert!(format!("{:?}", Body::None).contains("Body::None"));
         assert!(format!("{:?}", Body::Empty).contains("Body::Empty"));
-        assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains("1"));
+        assert!(format!("{:?}", Body::Bytes(Bytes::from_static(b"1"))).contains('1'));
     }
 
     #[actix_rt::test]
@@ -742,7 +714,7 @@ mod tests {
         let body = resp_body.downcast_ref::<String>().unwrap();
         assert_eq!(body, "hello cast");
         let body = &mut resp_body.downcast_mut::<String>().unwrap();
-        body.push_str("!");
+        body.push('!');
         let body = resp_body.downcast_ref::<String>().unwrap();
         assert_eq!(body, "hello cast!");
         let not_body = resp_body.downcast_ref::<()>();

@@ -7,7 +7,7 @@ use actix_http_test::test_server;
 use actix_service::{map_config, pipeline_factory, ServiceFactory};
 use actix_web::http::Version;
 use actix_web::{dev::AppConfig, web, App, HttpResponse};
-use futures::future::ok;
+use futures_util::future::ok;
 use open_ssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use rust_tls::ClientConfig;
 
@@ -64,9 +64,8 @@ async fn _test_connection_reuse_h2() {
         .and_then(
             HttpService::build()
                 .h2(map_config(
-                    App::new().service(
-                        web::resource("/").route(web::to(|| HttpResponse::Ok())),
-                    ),
+                    App::new()
+                        .service(web::resource("/").route(web::to(HttpResponse::Ok))),
                     |_| AppConfig::default(),
                 ))
                 .openssl(ssl_acceptor())
@@ -83,7 +82,7 @@ async fn _test_connection_reuse_h2() {
         .dangerous()
         .set_certificate_verifier(Arc::new(danger::NoCertificateVerification {}));
 
-    let client = awc::Client::build()
+    let client = awc::Client::builder()
         .connector(awc::Connector::new().rustls(Arc::new(config)).finish())
         .finish();
 
