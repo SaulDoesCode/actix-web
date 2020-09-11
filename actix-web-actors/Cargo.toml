@@ -16,30 +16,16 @@ name = "actix_web_actors"
 path = "src/lib.rs"
 
 [dependencies]
-<<<<<<< HEAD
-actix = "0.10.0-alpha.1"
-actix-web = {git = "https://github.com/SaulDoesCode/actix-web" }
-actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
-actix-codec = "0.2.0"
-bytes = "0.5.4"
-futures = "0.3.4"
-pin-project = "0.4.8"
-
-[dev-dependencies]
-actix-rt = "1.0.0"
-env_logger = "0.7.1"
-=======
 actix = "0.10.0"
-actix-web = { version = "3.0.0", default-features = false }
-actix-http = "2.0.0"
+actix-web = {git = "https://github.com/SaulDoesCode/actix-web", default-features = false }
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
 actix-codec = "0.3.0"
-bytes = "0.5.2"
+bytes = "0.5.6"
 futures-channel = { version = "0.3.5", default-features = false }
 futures-core = { version = "0.3.5", default-features = false }
-pin-project = "0.4.17"
+pin-project = "0.4.23"
 
 [dev-dependencies]
 actix-rt = "1.1.1"
 env_logger = "0.7"
 futures-util = { version = "0.3.5", default-features = false }
->>>>>>> upstream/master

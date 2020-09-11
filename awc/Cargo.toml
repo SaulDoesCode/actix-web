@@ -37,27 +37,15 @@ rustls = ["rust-tls", "actix-http/rustls"]
 compress = ["actix-http/compress"]
 
 [dependencies]
-<<<<<<< HEAD
-actix-codec = "0.2.0"
-actix-service = "1.0.5"
-actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
-actix-rt = "1.0.0"
-
-base64 = "0.12"
-bytes = "0.5.4"
-derive_more = "0.99.5"
-futures-core = "0.3.4"
-=======
 actix-codec = "0.3.0"
 actix-service = "1.0.6"
-actix-http = "2.0.0"
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web" }
 actix-rt = "1.0.0"
 
 base64 = "0.12"
 bytes = "0.5.3"
 derive_more = "0.99.2"
 futures-core = { version = "0.3.5", default-features = false }
->>>>>>> upstream/master
 log =" 0.4"
 mime = "0.3"
 percent-encoding = "2.1"
@@ -69,21 +57,9 @@ open-ssl = { version = "0.10", package = "openssl", optional = true }
 rust-tls = { version = "0.18.0", package = "rustls", optional = true, features = ["dangerous_configuration"] }
 
 [dev-dependencies]
-<<<<<<< HEAD
-actix-connect = { version = "2.0.0-alpha.2", features=["openssl"] }
-actix-web = { version = "3.0.0-alpha.1", features=["openssl"] }
-actix-http = { git = "https://github.com/SaulDoesCode/actix-web", features=["openssl"] }
-actix-http-test = { version = "1.0.0", features=["openssl"] }
-actix-utils = "1.0.6"
-actix-server = "1.0.2"
-actix-tls = { version = "2.0.0-alpha.1", features=["openssl", "rustls"] }
-brotli2 = "0.3.2"
-flate2 = "1.0.14"
-futures = "0.3.4"
-=======
 actix-connect = { version = "2.0.0", features = ["openssl"] }
-actix-web = { version = "3.0.0", features = ["openssl"] }
-actix-http = { version = "2.0.0", features = ["openssl"] }
+actix-web = { git = "https://github.com/SaulDoesCode/actix-web", features=["openssl"] }
+actix-http = { git = "https://github.com/SaulDoesCode/actix-web", features=["openssl"] }
 actix-http-test = { version = "2.0.0", features = ["openssl"] }
 actix-utils = "2.0.0"
 actix-server = "1.0.0"
@@ -91,6 +67,5 @@ actix-tls = { version = "2.0.0", features = ["openssl", "rustls"] }
 brotli2 = "0.3.2"
 flate2 = "1.0.13"
 futures-util = { version = "0.3.5", default-features = false }
->>>>>>> upstream/master
 env_logger = "0.7"
 webpki = "0.21"
