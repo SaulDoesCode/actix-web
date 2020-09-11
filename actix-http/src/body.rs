@@ -257,6 +257,12 @@ impl From<serde_json::Value> for Body {
     }
 }
 
+impl From<simd_json::OwnedValue> for Body {
+    fn from(v: simd_json::OwnedValue) -> Body {
+        Body::Bytes(v.to_string().into())
+    }
+}
+
 impl<S> From<SizedStream<S>> for Body
 where
     S: Stream<Item = Result<Bytes, Error>> + Unpin + 'static,
