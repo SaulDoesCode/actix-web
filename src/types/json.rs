@@ -125,7 +125,7 @@ impl<T: Serialize> Responder for Json<T> {
     type Future = Ready<Result<Response, Error>>;
 
     fn respond_to(self, _: &HttpRequest) -> Self::Future {
-        let body = match simd_json::to_string(&self.0) {
+        let body = match serde_json::to_string(&self.0) {
             Ok(body) => body,
             Err(e) => return err(e.into()),
         };
@@ -411,7 +411,7 @@ where
                         body.extend_from_slice(&chunk);
                     }
                 }
-                Ok(simd_json::to_owned_value::<U>(&mut body)?)
+                Ok(simd_json::from_slice::<U>(&mut body)?)
             }
             .boxed_local(),
         );
