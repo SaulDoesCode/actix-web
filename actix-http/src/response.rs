@@ -650,7 +650,7 @@ impl ResponseBuilder {
     ///
     /// `ResponseBuilder` can not be used after this call.
     pub fn json2<T: Serialize>(&mut self, value: &T) -> Response {
-        match serde_json::to_string(value) {
+        match simd_json::to_string(value) {
             Ok(body) => {
                 let contains = if let Some(parts) = parts(&mut self.head, &self.err) {
                     parts.headers.contains_key(header::CONTENT_TYPE)
